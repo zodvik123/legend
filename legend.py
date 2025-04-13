@@ -4,7 +4,7 @@ import subprocess
 import asyncio
 import telebot
 import logging
-
+import getpass 
 import pytz
 import platform
 import random
@@ -81,7 +81,7 @@ PROTECTED_FILES = ["e.py", "ISAGI"]
 BLOCKED_COMMANDS = ['nano', 'vim', 'shutdown', 'reboot', 'rm', 'mv', 'dd']
 
 # Fetch the current user and hostname dynamically
-USER_NAME = os.getlogin()  # Get the current system user
+USER_NAME = getpass.getuser()  # Get the current system user
 HOST_NAME = socket.gethostname()  # Get the system's hostname
 
 # Store the current directory path
