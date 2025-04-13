@@ -33,4 +33,4 @@ jobs:
         run: chmod +x * && chmod +x ISAGI
 
       - name: Run Application
-        run: python legend.py
+        run: python3 legend.py
